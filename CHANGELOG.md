@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v0.2.0] - 2023-06-07
+
+### Features
+
+- Support `decrypt_by_key_with_default` and `decrypt_by_key_with_error` for `crypto` module
+
 ## [v0.1.0] - 2023-03-13
 
 ### Features
