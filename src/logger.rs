@@ -1,8 +1,10 @@
 // #![allow(unused)]
 
-use std::{env, path::PathBuf};
+use std::{env, fs, path::PathBuf, thread};
 
-use log::debug;
+use chrono::{DateTime, Utc};
+use job_scheduler::{Job, JobScheduler};
+use log::{debug, warn};
 use time::UtcOffset;
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::{
@@ -56,6 +58,68 @@ pub fn init_logger(
     }
 
     (None, None)
+}
+
+/// Immediately clean up files in the specified `directory` that have been modified more than
+/// a specified number of `days` ago.
+/// Typically used to clean up log files with.
+///
+/// ```rust,ignore
+///
+/// cleanup_files_immediately("/opt/logs/apps/", 30);
+/// ```
+pub fn cleanup_files_immediately(directory: &str, days: i64) {
+    if let Ok(paths) = fs::read_dir(directory) {
+        for path in paths.flatten() {
+            let path_buf = path.path();
+            if let Ok(modified) = fs::metadata(&path_buf).and_then(|metadata| metadata.modified()) {
+                if (Utc::now() - DateTime::from(modified)).num_days() > days {
+                    if fs::remove_file(path_buf).is_ok() {
+                    } else {
+                        warn!("remove log file failed")
+                    }
+                }
+            } else {
+                warn!("try to access log file metadata but failed")
+            }
+        }
+    } else {
+        warn!("read files from {} failed", directory)
+    }
+}
+
+/// Clean up files in the specified `directory` that have been modified more than
+/// a specified number of `days` ago.
+///
+/// ```rust,ignore
+/// // The parameter `cron_expression` default is `0 0 0 * * * *`.
+/// // The parameter `cron_expression` sample: 0 15 6,8,10 * Mar,Jun Fri 2017
+/// // means Run at second 0 of the 15th minute of the 6th, 8th, and 10th hour of any day in March
+/// // and June that is a Friday of the year 2017.
+/// // More information about `cron_expression` parameter see
+/// // https://docs.rs/job_scheduler/latest/job_scheduler/
+///
+/// schedule_cleanup_log_files("", "/opt/logs/apps/", 30);
+/// ```
+pub fn schedule_cleanup_log_files(cron_expression: &str, directory: &str, days: i64) {
+    // cron_expression sample: 0 15 6,8,10 * Mar,Jun Fri 2017
+    // Run at second 0 of the 15th minute of the 6th, 8th, and 10th hour
+    // of any day in March and June that is a Friday of the year 2017.
+    // more information about `cron_expression` see  https://docs.rs/job_scheduler/latest/job_scheduler/
+    let mut default_cron_expression = "0 0 0 * * * *";
+    if !cron_expression.trim().is_empty() {
+        default_cron_expression = cron_expression;
+    }
+    let mut sched = JobScheduler::new();
+    sched.add(Job::new(default_cron_expression.parse().unwrap(), || {
+        debug!("start clean log files");
+        cleanup_files_immediately(directory, days);
+    }));
+
+    loop {
+        sched.tick();
+        thread::sleep(sched.time_till_next_job());
+    }
 }
 
 #[allow(unused)]
