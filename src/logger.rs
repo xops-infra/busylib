@@ -4,7 +4,7 @@ use std::{env, fs, path::PathBuf, thread};
 
 use chrono::{DateTime, Utc};
 use job_scheduler::{Job, JobScheduler};
-use log::{debug, warn};
+use log::debug;
 use time::UtcOffset;
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::{
@@ -18,7 +18,11 @@ use tracing_subscriber::{
     Layer, Registry,
 };
 
-use crate::{config::dev_mode, prelude::EnhancedExpect};
+use crate::errors::RemoveFilesError;
+use crate::{
+    config::dev_mode,
+    prelude::{EnhancedExpect, EnhancedUnwrap},
+};
 
 pub type LogHandle = Handle<Targets, Registry>;
 
@@ -68,24 +72,30 @@ pub fn init_logger(
 ///
 /// cleanup_files_immediately("/opt/logs/apps/", 30);
 /// ```
-pub fn cleanup_files_immediately(directory: &str, days: i64) {
-    if let Ok(paths) = fs::read_dir(directory) {
-        for path in paths.flatten() {
-            let path_buf = path.path();
-            if let Ok(modified) = fs::metadata(&path_buf).and_then(|metadata| metadata.modified()) {
-                if (Utc::now() - DateTime::from(modified)).num_days() > days {
-                    if fs::remove_file(path_buf).is_ok() {
-                    } else {
-                        warn!("remove log file failed")
-                    }
-                }
-            } else {
-                warn!("try to access log file metadata but failed")
-            }
+pub fn cleanup_files_immediately(directory: &str, days: i64) -> Result<(), RemoveFilesError> {
+    let paths = fs::read_dir(directory)
+        .map_err(|e| RemoveFilesError {
+            details: format!("An error occurred in reading the directory and the cleanup file failed: {}", e),
+        })?;
+
+    for path in paths.flatten() {
+        let path_buf = path.path();
+        let modified = fs::metadata(&path_buf)
+            .and_then(|metadata| metadata.modified())
+            .map_err(|e| RemoveFilesError {
+                details: format!("An error occurred in getting file modified time and the cleanup file failed: {}", e),
+            })?;
+        if (Utc::now() - DateTime::from(modified)).num_days() > days {
+            fs::remove_file(&path_buf)
+                .map_err(|e| RemoveFilesError {
+                    details: format!(
+                        "delete file failed, path: {:?}, error: {}",
+                        path_buf, e
+                    ),
+                })?;
         }
-    } else {
-        warn!("read files from {} failed", directory)
     }
+    Ok(())
 }
 
 /// Clean up files in the specified `directory` that have been modified more than
@@ -99,21 +109,28 @@ pub fn cleanup_files_immediately(directory: &str, days: i64) {
 /// // More information about `cron_expression` parameter see
 /// // https://docs.rs/job_scheduler/latest/job_scheduler/
 ///
-/// schedule_cleanup_log_files("", "/opt/logs/apps/", 30);
+/// schedule_cleanup_log_files(None, "/opt/logs/apps/", 30);
 /// ```
-pub fn schedule_cleanup_log_files(cron_expression: &str, directory: &str, days: i64) {
+pub fn schedule_cleanup_log_files(
+    directory: &str,
+    days: i64,
+    cron_expression: Option<String>,
+) -> Result<(), RemoveFilesError> {
     // cron_expression sample: 0 15 6,8,10 * Mar,Jun Fri 2017
     // Run at second 0 of the 15th minute of the 6th, 8th, and 10th hour
     // of any day in March and June that is a Friday of the year 2017.
     // more information about `cron_expression` see  https://docs.rs/job_scheduler/latest/job_scheduler/
-    let mut default_cron_expression = "0 0 0 * * * *";
-    if !cron_expression.trim().is_empty() {
-        default_cron_expression = cron_expression;
-    }
+    let cron_expression = {
+        if cron_expression.is_none() {
+            "0 0 0 * * * *".to_owned()
+        } else {
+            cron_expression.unwp()
+        }
+    };
     let mut sched = JobScheduler::new();
-    sched.add(Job::new(default_cron_expression.parse().unwrap(), || {
+    sched.add(Job::new(cron_expression.parse().unwp(), || {
         debug!("start clean log files");
-        cleanup_files_immediately(directory, days);
+        cleanup_files_immediately(directory, days).ex("cleanup_files_immediately should work");
     }));
 
     loop {
