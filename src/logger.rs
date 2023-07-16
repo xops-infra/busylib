@@ -122,7 +122,7 @@ pub fn schedule_cleanup_log_files(cron_expression: &str, directory: &str, days: 
     }
 }
 
-#[allow(unused)]
+#[allow(unused, unreachable_code)]
 pub fn change_debug(handle: &LogHandle, debug: &str) -> bool {
     // TODO: change_debug
     panic!("TODO: ");
