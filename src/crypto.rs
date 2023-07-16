@@ -1,9 +1,7 @@
 use magic_crypt::{new_magic_crypt, MagicCryptTrait};
 
+use crate::errors::DecryptError;
 use crate::prelude::EnhancedUnwrap;
-use std::error::Error;
-use std::fmt;
-use std::fmt::{Display, Formatter};
 
 /// return encrypted string in base64
 pub fn encrypt_by_key(value: String, key: &str) -> String {
@@ -36,19 +34,6 @@ pub fn decrypt_by_key_with_error(value: String, key: &str) -> Result<String, Dec
         Err(e) => Err(DecryptError {
             details: format!("{}", e),
         }),
-    }
-}
-
-#[derive(Debug)]
-pub struct DecryptError {
-    details: String,
-}
-
-impl Error for DecryptError {}
-
-impl Display for DecryptError {
-    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        write!(f, "{}", self.details)
     }
 }
 
