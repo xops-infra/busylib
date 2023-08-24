@@ -160,3 +160,22 @@ fn log_path() -> PathBuf {
     // TODO: log_path read from env
     PathBuf::from(r"/opt/logs/apps/")
 }
+
+#[cfg(test)]
+mod logger_test {
+    use crate::logger::{cleanup_files_immediately, schedule_cleanup_log_files};
+
+    #[test]
+    fn test_delete_log_files() {
+        if let Err(e) = cleanup_files_immediately("/opt/logs/apps/", 30) {
+            panic!("test_delete_log_files failed, error: {}", e);
+        }
+    }
+
+    #[test]
+    fn test_schedule_cleanup_log_files() {
+        if let Err(e) = schedule_cleanup_log_files("/opt/logs/apps/", 30, None) {
+            panic!("test_schedule_cleanup_log_files failed, error: {}", e);
+        }
+    }
+}
