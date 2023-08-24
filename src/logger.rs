@@ -1,7 +1,9 @@
 // #![allow(unused)]
 
-use std::{env, path::PathBuf};
+use std::{env, fs, path::PathBuf, thread};
 
+use chrono::{DateTime, Utc};
+use job_scheduler::{Job, JobScheduler};
 use log::debug;
 use time::UtcOffset;
 use tracing_appender::non_blocking::WorkerGuard;
@@ -16,7 +18,11 @@ use tracing_subscriber::{
     Layer, Registry,
 };
 
-use crate::{config::dev_mode, prelude::EnhancedExpect};
+use crate::errors::RemoveFilesError;
+use crate::{
+    config::dev_mode,
+    prelude::{EnhancedExpect, EnhancedUnwrap},
+};
 
 pub type LogHandle = Handle<Targets, Registry>;
 
@@ -58,7 +64,82 @@ pub fn init_logger(
     (None, None)
 }
 
-#[allow(unused)]
+/// Immediately clean up files in the specified `directory` that have been modified more than
+/// a specified number of `days` ago.
+/// Typically used to clean up log files with.
+///
+/// ```rust,ignore
+///
+/// cleanup_files_immediately("/opt/logs/apps/", 30);
+/// ```
+pub fn cleanup_files_immediately(directory: &str, days: i64) -> Result<(), RemoveFilesError> {
+    let paths = fs::read_dir(directory)
+        .map_err(|e| RemoveFilesError {
+            details: format!("An error occurred in reading the directory and the cleanup file failed: {}", e),
+        })?;
+
+    for path in paths.flatten() {
+        let path_buf = path.path();
+        let modified = fs::metadata(&path_buf)
+            .and_then(|metadata| metadata.modified())
+            .map_err(|e| RemoveFilesError {
+                details: format!("An error occurred in getting file modified time and the cleanup file failed: {}", e),
+            })?;
+        if (Utc::now() - DateTime::from(modified)).num_days() > days {
+            fs::remove_file(&path_buf)
+                .map_err(|e| RemoveFilesError {
+                    details: format!(
+                        "delete file failed, path: {:?}, error: {}",
+                        path_buf, e
+                    ),
+                })?;
+        }
+    }
+    Ok(())
+}
+
+/// Clean up files in the specified `directory` that have been modified more than
+/// a specified number of `days` ago.
+///
+/// ```rust,ignore
+/// // The parameter `cron_expression` default is `0 0 0 * * * *`.
+/// // The parameter `cron_expression` sample: 0 15 6,8,10 * Mar,Jun Fri 2017
+/// // means Run at second 0 of the 15th minute of the 6th, 8th, and 10th hour of any day in March
+/// // and June that is a Friday of the year 2017.
+/// // More information about `cron_expression` parameter see
+/// // https://docs.rs/job_scheduler/latest/job_scheduler/
+///
+/// schedule_cleanup_log_files(None, "/opt/logs/apps/", 30);
+/// ```
+pub fn schedule_cleanup_log_files(
+    directory: &str,
+    days: i64,
+    cron_expression: Option<String>,
+) -> Result<(), RemoveFilesError> {
+    // cron_expression sample: 0 15 6,8,10 * Mar,Jun Fri 2017
+    // Run at second 0 of the 15th minute of the 6th, 8th, and 10th hour
+    // of any day in March and June that is a Friday of the year 2017.
+    // more information about `cron_expression` see  https://docs.rs/job_scheduler/latest/job_scheduler/
+    let cron_expression = {
+        if cron_expression.is_none() {
+            "0 0 0 * * * *".to_owned()
+        } else {
+            cron_expression.unwp()
+        }
+    };
+    let mut sched = JobScheduler::new();
+    sched.add(Job::new(cron_expression.parse().unwp(), || {
+        debug!("start clean log files");
+        cleanup_files_immediately(directory, days).ex("cleanup_files_immediately should work");
+    }));
+
+    loop {
+        sched.tick();
+        thread::sleep(sched.time_till_next_job());
+    }
+}
+
+#[allow(unused, unreachable_code)]
 pub fn change_debug(handle: &LogHandle, debug: &str) -> bool {
     // TODO: change_debug
     panic!("TODO: ");
@@ -78,4 +159,23 @@ fn log_path() -> PathBuf {
     }
     // TODO: log_path read from env
     PathBuf::from(r"/opt/logs/apps/")
+}
+
+#[cfg(test)]
+mod logger_test {
+    use crate::logger::{cleanup_files_immediately, schedule_cleanup_log_files};
+
+    #[test]
+    fn test_delete_log_files() {
+        if let Err(e) = cleanup_files_immediately("/opt/logs/apps/", 30) {
+            panic!("test_delete_log_files failed, error: {}", e);
+        }
+    }
+
+    #[test]
+    fn test_schedule_cleanup_log_files() {
+        if let Err(e) = schedule_cleanup_log_files("/opt/logs/apps/", 30, None) {
+            panic!("test_schedule_cleanup_log_files failed, error: {}", e);
+        }
+    }
 }

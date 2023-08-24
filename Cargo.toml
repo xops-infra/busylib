@@ -1,6 +1,6 @@
 [package]
 name = "busylib"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 
 [dependencies]
@@ -14,3 +14,5 @@ arc-swap = "1.5.1"
 once_cell = "1.15.0"
 magic-crypt = "3.1"
 reqwest = { version = "0.11", default-features = false, features = ["json", "rustls-tls"]}
+chrono = "0.4.26"
+job_scheduler = "1.2.1"

@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v0.3.0] - 2023-08-24
+
+### Features
+
+- Support log files rolling deletion for `logger` module
+
 ## [v0.2.0] - 2023-06-07
 
 ### Features
