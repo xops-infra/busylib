@@ -57,7 +57,7 @@ pub fn init_logger(
         debug!("Debug logging is on");
         return (Some(guard), Some(reload_handle));
     } else {
-        reg.with(stdout_log.with_filter(filter::LevelFilter::INFO))
+        reg.with(stdout_log.with_filter(filter::LevelFilter::INFO).with_filter(base_filter))
             .init();
     }
 
