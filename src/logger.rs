@@ -4,7 +4,7 @@ use std::{env, fs, path::PathBuf, thread};
 
 use chrono::{DateTime, Utc};
 use job_scheduler::{Job, JobScheduler};
-use log::debug;
+use log::{debug, warn};
 use time::UtcOffset;
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::{
@@ -45,7 +45,7 @@ pub fn init_logger(
 
     if debug {
         let file_appender =
-            tracing_appender::rolling::daily(log_path(), format!("{}.log", bin_name));
+            tracing_appender::rolling::daily(log_path(None, None), format!("{}.log", bin_name));
         let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
         let file_filter = tracing_subscriber::fmt::layer()
             .with_timer(timer)
@@ -148,22 +148,38 @@ pub fn change_debug(handle: &LogHandle, debug: &str) -> bool {
     true
 }
 
-fn log_path() -> PathBuf {
+pub fn log_path(log_path: Option<&str>, env_log_path_key: Option<&str>) -> PathBuf {
     if dev_mode() {
         let dir = env::temp_dir();
-        println!(
+        debug!(
             "log will be saved to temporary directory: {}",
             dir.display()
         );
         return dir;
     }
-    // TODO: log_path read from env
-    PathBuf::from(r"/opt/logs/apps/")
+
+    // log path from param is first if it have been set
+    if log_path.is_some() {
+        return PathBuf::from(log_path.unwp().trim());
+    }
+
+    // default log path
+    let log_path = r"/opt/logs/apps/";
+    if env_log_path_key.is_some() {
+        let env_log_path = env::var(env_log_path_key.unwp());
+        match env_log_path {
+            Ok(env_log_path) => return PathBuf::from(env_log_path),
+            Err(_) => warn!("{} is not set, use default log path: {}", env_log_path_key.unwp(), log_path),
+        }
+    };
+    PathBuf::from(log_path)
 }
 
 #[cfg(test)]
 mod logger_test {
-    use crate::logger::{cleanup_files_immediately, schedule_cleanup_log_files};
+    use std::env;
+    use crate::logger::{cleanup_files_immediately, schedule_cleanup_log_files, log_path};
+    use crate::prelude::EnhancedUnwrap;
 
     #[test]
     fn test_delete_log_files() {
@@ -177,5 +193,18 @@ mod logger_test {
         if let Err(e) = schedule_cleanup_log_files("/opt/logs/apps/", 30, None) {
             panic!("test_schedule_cleanup_log_files failed, error: {}", e);
         }
+    }
+
+    #[test]
+    fn test_get_log_path() {
+        let log_path_default = log_path(None, None);
+        assert_eq!(log_path_default.to_str().unwp(), "/opt/logs/apps/");
+
+        let log_path_from_param = log_path(Some("/a/b/c"), None);
+        assert_eq!(log_path_from_param.to_str().unwp(), "/a/b/c");
+
+        env::set_var("LOG_PATH", "/xx/xx");
+        let log_path_from_env = log_path(None, Some("LOG_PATH"));
+        assert_eq!(log_path_from_env.to_str().unwp(), "/xx/xx");
     }
 }
