@@ -57,8 +57,12 @@ pub fn init_logger(
         debug!("Debug logging is on");
         return (Some(guard), Some(reload_handle));
     } else {
-        reg.with(stdout_log.with_filter(filter::LevelFilter::INFO).with_filter(base_filter))
-            .init();
+        reg.with(
+            stdout_log
+                .with_filter(filter::LevelFilter::INFO)
+                .with_filter(base_filter),
+        )
+        .init();
     }
 
     (None, None)
@@ -73,10 +77,12 @@ pub fn init_logger(
 /// cleanup_files_immediately("/opt/logs/apps/", 30);
 /// ```
 pub fn cleanup_files_immediately(directory: &str, days: i64) -> Result<(), RemoveFilesError> {
-    let paths = fs::read_dir(directory)
-        .map_err(|e| RemoveFilesError {
-            details: format!("An error occurred in reading the directory and the cleanup file failed: {}", e),
-        })?;
+    let paths = fs::read_dir(directory).map_err(|e| RemoveFilesError {
+        details: format!(
+            "An error occurred in reading the directory and the cleanup file failed: {}",
+            e
+        ),
+    })?;
 
     for path in paths.flatten() {
         let path_buf = path.path();
@@ -86,13 +92,9 @@ pub fn cleanup_files_immediately(directory: &str, days: i64) -> Result<(), Remov
                 details: format!("An error occurred in getting file modified time and the cleanup file failed: {}", e),
             })?;
         if (Utc::now() - DateTime::from(modified)).num_days() > days {
-            fs::remove_file(&path_buf)
-                .map_err(|e| RemoveFilesError {
-                    details: format!(
-                        "delete file failed, path: {:?}, error: {}",
-                        path_buf, e
-                    ),
-                })?;
+            fs::remove_file(&path_buf).map_err(|e| RemoveFilesError {
+                details: format!("delete file failed, path: {:?}, error: {}", path_buf, e),
+            })?;
         }
     }
     Ok(())
@@ -169,7 +171,11 @@ pub fn log_path(log_path: Option<&str>, env_log_path_key: Option<&str>) -> PathB
         let env_log_path = env::var(env_log_path_key.unwp());
         match env_log_path {
             Ok(env_log_path) => return PathBuf::from(env_log_path),
-            Err(_) => warn!("{} is not set, use default log path: {}", env_log_path_key.unwp(), log_path),
+            Err(_) => warn!(
+                "{} is not set, use default log path: {}",
+                env_log_path_key.unwp(),
+                log_path
+            ),
         }
     };
     PathBuf::from(log_path)
@@ -177,9 +183,9 @@ pub fn log_path(log_path: Option<&str>, env_log_path_key: Option<&str>) -> PathB
 
 #[cfg(test)]
 mod logger_test {
-    use std::env;
-    use crate::logger::{cleanup_files_immediately, schedule_cleanup_log_files, log_path};
+    use crate::logger::{cleanup_files_immediately, log_path, schedule_cleanup_log_files};
     use crate::prelude::EnhancedUnwrap;
+    use std::env;
 
     #[test]
     fn test_delete_log_files() {
