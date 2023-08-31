@@ -64,6 +64,7 @@ pub fn init_logger(
     let file_filter = tracing_subscriber::fmt::layer()
         .with_timer(timer)
         .with_writer(non_blocking.make_writer())
+        .json()
         .with_filter(base_filter);
 
     reg.with(stdout_log.with_filter(filter).and_then(file_filter))
