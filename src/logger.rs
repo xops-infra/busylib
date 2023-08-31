@@ -30,42 +30,45 @@ pub fn init_logger(
     bin_name: &str,
     crates_to_log: &[&str],
     debug: bool,
+    log_directory: Option<PathBuf>,
 ) -> (Option<WorkerGuard>, Option<LogHandle>) {
+    let level_filter = if debug {
+        filter::LevelFilter::DEBUG
+    } else {
+        filter::LevelFilter::INFO
+    };
+
+    let log_directory = {
+        if log_directory.is_some() {
+            log_directory.unwp()
+        } else {
+            log_path(None, None)
+        }
+    };
+
     let timer = OffsetTime::new(
         UtcOffset::from_hms(8, 0, 0).ex("UtcOffset::from_hms should work"),
         time::format_description::well_known::Rfc3339,
     );
     let stdout_log = tracing_subscriber::fmt::layer().with_timer(timer.clone());
     let reg = tracing_subscriber::registry();
-    let mut base_filter = Targets::new().with_target(bin_name, filter::LevelFilter::DEBUG);
+
+    let mut base_filter = Targets::new().with_target(bin_name, level_filter);
     for crate_name in crates_to_log {
-        base_filter = base_filter.with_target(*crate_name, filter::LevelFilter::DEBUG);
+        base_filter = base_filter.with_target(*crate_name, level_filter);
     }
     let (filter, reload_handle) = reload::Layer::new(base_filter.clone());
+    let file_appender =
+        tracing_appender::rolling::daily(log_directory, format!("{}.log", bin_name));
+    let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
+    let file_filter = tracing_subscriber::fmt::layer()
+        .with_timer(timer)
+        .with_writer(non_blocking.make_writer())
+        .with_filter(base_filter);
 
-    if debug {
-        let file_appender =
-            tracing_appender::rolling::daily(log_path(None, None), format!("{}.log", bin_name));
-        let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
-        let file_filter = tracing_subscriber::fmt::layer()
-            .with_timer(timer)
-            .with_writer(non_blocking.make_writer())
-            .with_filter(base_filter);
-
-        reg.with(stdout_log.with_filter(filter).and_then(file_filter))
-            .init();
-        debug!("Debug logging is on");
-        return (Some(guard), Some(reload_handle));
-    } else {
-        reg.with(
-            stdout_log
-                .with_filter(filter::LevelFilter::INFO)
-                .with_filter(base_filter),
-        )
+    reg.with(stdout_log.with_filter(filter).and_then(file_filter))
         .init();
-    }
-
-    (None, None)
+    (Some(guard), Some(reload_handle))
 }
 
 /// Immediately clean up files in the specified `directory` that have been modified more than
@@ -193,6 +196,7 @@ mod logger_test {
     use crate::logger::{cleanup_files_immediately, log_path, schedule_cleanup_log_files};
     use crate::prelude::EnhancedUnwrap;
     use chrono::{DateTime, Utc};
+    use log::{debug, info};
     use std::time::Duration;
     use std::{env, fs};
 
@@ -249,5 +253,13 @@ mod logger_test {
         env::set_var("LOG_PATH", "/xx/xx");
         let log_path_from_env = log_path(None, Some("LOG_PATH"));
         assert_eq!(log_path_from_env.to_str().unwp(), "/xx/xx");
+    }
+
+    #[test]
+    fn test_init_logger() {
+        let log_path = log_path(Some("./"), None);
+        let (_, _) = super::init_logger("busylib", &["busylib"], false, Some(log_path));
+        debug!("test_init_logger - debug");
+        info!("test_init_logger - info, message: {}", "xxxadf");
     }
 }
