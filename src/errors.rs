@@ -27,3 +27,11 @@ impl Display for RemoveFilesError {
         write!(f, "{}", self.details)
     }
 }
+
+impl From<tokio_cron_scheduler::JobSchedulerError> for RemoveFilesError {
+    fn from(error: tokio_cron_scheduler::JobSchedulerError) -> Self {
+        Self {
+            details: error.to_string(),
+        }
+    }
+}
