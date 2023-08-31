@@ -2,6 +2,27 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v0.4.0] - 2023-08-24
+
+### Features
+
+- Support get log file path from env.
+- Support json format logs.
+
+### Bug Fixes
+
+- Fix no base filter in non-debug mode.
+- Fix thread blocking in `schedule_cleanup_log_files` in `logger` module.
+- Fix no log file generated in non-debug mode.
+
+### Build
+
+- Update dependencies to newest version.
+
+### Refactor
+
+- Refactor `dev_mode` to `debug_mode` in `logger` module.
+
 ## [v0.3.0] - 2023-08-24
 
 ### Features
