@@ -6,8 +6,8 @@ use once_cell::sync::Lazy;
 pub type GlobalString = Lazy<ArcSwap<String>>;
 pub type GlobalStaticStr = Lazy<ArcSwap<&'static str>>;
 
-pub fn dev_mode() -> bool {
-    env::args().nth(1) == Some("dev".into())
+pub fn debug_mode() -> bool {
+    env::args().nth(1) == Some("debug".into())
 }
 
 pub fn env_var_with_default(name: &str, default: &str) -> ArcSwap<String> {

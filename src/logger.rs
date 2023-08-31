@@ -20,7 +20,7 @@ use tracing_subscriber::{
 
 use crate::errors::RemoveFilesError;
 use crate::{
-    config::dev_mode,
+    config::debug_mode,
     prelude::{EnhancedExpect, EnhancedUnwrap},
 };
 
@@ -162,7 +162,7 @@ pub fn change_debug(handle: &LogHandle, debug: &str) -> bool {
 }
 
 pub fn log_path(log_path: Option<&str>, env_log_path_key: Option<&str>) -> PathBuf {
-    if dev_mode() {
+    if debug_mode() {
         let dir = env::temp_dir();
         debug!(
             "log will be saved to temporary directory: {}",
