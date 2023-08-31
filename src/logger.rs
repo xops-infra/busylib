@@ -1,11 +1,11 @@
 // #![allow(unused)]
 
-use std::{env, fs, path::PathBuf, thread};
+use std::{env, fs, path::PathBuf};
 
 use chrono::{DateTime, Utc};
-use job_scheduler::{Job, JobScheduler};
 use log::{debug, warn};
 use time::UtcOffset;
+use tokio_cron_scheduler::Job;
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::{
     filter,
@@ -111,34 +111,41 @@ pub fn cleanup_files_immediately(directory: &str, days: i64) -> Result<(), Remov
 /// // More information about `cron_expression` parameter see
 /// // https://docs.rs/job_scheduler/latest/job_scheduler/
 ///
-/// schedule_cleanup_log_files(None, "/opt/logs/apps/", 30);
+/// schedule_cleanup_log_files("/opt/logs/apps/", 30, None);
 /// ```
-pub fn schedule_cleanup_log_files(
+pub async fn schedule_cleanup_log_files(
     directory: &str,
     days: i64,
-    cron_expression: Option<String>,
+    cron_expression: Option<&str>,
 ) -> Result<(), RemoveFilesError> {
-    // cron_expression sample: 0 15 6,8,10 * Mar,Jun Fri 2017
-    // Run at second 0 of the 15th minute of the 6th, 8th, and 10th hour
-    // of any day in March and June that is a Friday of the year 2017.
-    // more information about `cron_expression` see  https://docs.rs/job_scheduler/latest/job_scheduler/
     let cron_expression = {
         if cron_expression.is_none() {
-            "0 0 0 * * * *".to_owned()
+            "0 0 0 * * * *"
         } else {
-            cron_expression.unwp()
+            cron_expression.unwp().trim()
         }
     };
-    let mut sched = JobScheduler::new();
-    sched.add(Job::new(cron_expression.parse().unwp(), || {
-        debug!("start clean log files");
-        cleanup_files_immediately(directory, days).ex("cleanup_files_immediately should work");
-    }));
 
-    loop {
-        sched.tick();
-        thread::sleep(sched.time_till_next_job());
-    }
+    let directory = directory.to_owned();
+
+    let sched = tokio_cron_scheduler::JobScheduler::new().await?;
+    sched
+        .add(Job::new_async(cron_expression, move |uuid, mut l| {
+            let directory = directory.clone();
+            Box::pin(async move {
+                cleanup_files_immediately(&directory, days).unwp();
+                let next_tick = l.next_tick_for_job(uuid).await;
+                if let Ok(Some(ts)) = next_tick {
+                    tokio::time::sleep(tokio::time::Duration::from_secs(
+                        (ts - Utc::now()).num_seconds() as u64,
+                    ))
+                    .await
+                }
+            })
+        })?)
+        .await?;
+    sched.start().await?;
+    Ok(())
 }
 
 #[allow(unused, unreachable_code)]
@@ -185,7 +192,9 @@ pub fn log_path(log_path: Option<&str>, env_log_path_key: Option<&str>) -> PathB
 mod logger_test {
     use crate::logger::{cleanup_files_immediately, log_path, schedule_cleanup_log_files};
     use crate::prelude::EnhancedUnwrap;
-    use std::env;
+    use chrono::{DateTime, Utc};
+    use std::time::Duration;
+    use std::{env, fs};
 
     #[test]
     fn test_delete_log_files() {
@@ -194,11 +203,39 @@ mod logger_test {
         }
     }
 
-    #[test]
-    fn test_schedule_cleanup_log_files() {
-        if let Err(e) = schedule_cleanup_log_files("/opt/logs/apps/", 30, None) {
-            panic!("test_schedule_cleanup_log_files failed, error: {}", e);
+    #[tokio::test]
+    async fn test_schedule_cleanup_log_files() {
+        let log_path = "/opt/logs/apps/";
+        let days = 30;
+        // execute once every 5 seconds for testing
+        let cron_expression = "1/5 * * * * * *";
+        println!("test_schedule_cleanup_log_files start");
+        if let Err(e) = schedule_cleanup_log_files(log_path, days, Some(cron_expression)).await {
+            panic!("schedule_cleanup_log_files failed, error: {}", e)
         }
+        println!("test_schedule_cleanup_log_files end");
+
+        let mut has_files = true;
+        let mut count = 0;
+        while count < 3 {
+            if let Ok(entries) = fs::read_dir(log_path) {
+                has_files = entries.filter_map(|entry| entry.ok()).any(|entry| {
+                    entry
+                        .metadata()
+                        .ok()
+                        .map(|md| {
+                            (Utc::now() - DateTime::from(md.modified().unwp())).num_days() > days
+                        })
+                        .unwrap_or(false)
+                });
+                if !has_files {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_secs(6)).await;
+                count += 1;
+            }
+        }
+        assert!(!has_files);
     }
 
     #[test]
