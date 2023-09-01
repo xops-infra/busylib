@@ -2,7 +2,7 @@
 
 pub mod config;
 pub mod crypto;
-mod errors;
+pub mod errors;
 pub mod http;
 pub mod logger;
 pub mod prelude;

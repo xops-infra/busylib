@@ -73,68 +73,93 @@ pub fn init_logger(
     (Some(guard), Some(reload_handle))
 }
 
-/// Immediately clean up files in the specified `directory` that have been modified more than
-/// a specified number of `days` ago.
-/// Typically used to clean up log files with.
-///
-/// ```rust,ignore
-///
-/// cleanup_files_immediately("/opt/logs/apps/", 30);
-/// ```
-pub fn cleanup_files_immediately<P: AsRef<Path>>(
-    dir: P,
-    days: i64,
-) -> Result<(), RemoveFilesError> {
-    let paths = fs::read_dir(dir).map_err(|e| RemoveFilesError {
-        details: format!(
-            "An error occurred in reading the directory and the cleanup file failed: {}",
-            e
-        ),
-    })?;
-
-    for path in paths.flatten().map(|e| e.path()) {
-        let modified = fs::metadata(&path)
-            .and_then(|metadata| metadata.modified())
-            .map_err(|e| RemoveFilesError {
-                details: format!("An error occurred in getting file modified time and the cleanup file failed: {}", e),
-            })?;
-        if (Utc::now() - DateTime::from(modified)).num_days() > days {
-            fs::remove_file(&path).map_err(|e| RemoveFilesError {
-                details: format!("delete file failed, path: {:?}, error: {}", path, e),
-            })?;
-        }
-    }
-    Ok(())
+pub trait LogCleanerErrorHandler {
+    fn handle_error(&self, error: RemoveFilesError);
 }
 
-/// Clean up files in the specified `directory` that have been modified more than
-/// a specified number of `days` ago.
-///
-/// ```rust,ignore
-/// // The parameter `cron_expression` default is `0 0 0 * * * *`.
-/// // The parameter `cron_expression` sample: 0 15 6,8,10 * Mar,Jun Fri 2017
-/// // means Run at second 0 of the 15th minute of the 6th, 8th, and 10th hour of any day in March
-/// // and June that is a Friday of the year 2017.
-/// // More information about `cron_expression` parameter see
-/// // https://docs.rs/job_scheduler/latest/job_scheduler/
-///
-/// schedule_cleanup_log_files("/opt/logs/apps/", 30, None);
-/// ```
-pub async fn schedule_cleanup_log_files<P: AsRef<Path>>(
-    dir: P,
-    days: i64,
-    cron_expression: Option<&str>,
-) -> Result<(), RemoveFilesError> {
-    let dir = dir.as_ref().to_owned();
+#[derive(Clone, Debug)]
+pub struct LogCleaner<P, H>
+where
+    P: AsRef<Path>,
+    H: LogCleanerErrorHandler,
+{
+    pub dir: P,
+    pub days: i64,
+    pub cron_expression: Option<String>,
+    pub error_handler: H,
+}
 
-    let sched = tokio_cron_scheduler::JobScheduler::new().await?;
-    sched
-        .add(Job::new_async(
-            cron_expression.unwrap_or("0 0 0 * * * *"),
-            move |uuid, mut l| {
-                let dir = dir.clone();
+impl<P, H> LogCleaner<P, H>
+where
+    P: AsRef<Path> + Sync + Send + Clone + 'static,
+    H: LogCleanerErrorHandler + Sync + Send + Clone + 'static,
+{
+    pub fn new(dir: P, days: i64, cron_expression: Option<String>, error_handler: H) -> Self {
+        Self {
+            dir,
+            days,
+            cron_expression,
+            error_handler,
+        }
+    }
+
+    /// Immediately clean up files in the specified `self.dir` that have been modified more than
+    /// a specified number of `self.days` ago.
+    /// Typically used to clean up log files with.
+    ///
+    /// ```rust,ignore
+    ///
+    /// cleanup_files_immediately("/opt/logs/apps/", 30);
+    /// ```
+    pub fn cleanup_files_immediately(&self) -> Result<(), RemoveFilesError> {
+        let paths = fs::read_dir(&self.dir).map_err(|e| RemoveFilesError {
+            details: format!(
+                "An error occurred in reading the directory and the cleanup file failed: {}",
+                e
+            ),
+        })?;
+
+        for path in paths.flatten().map(|e| e.path()) {
+            let modified = fs::metadata(&path)
+                .and_then(|metadata| metadata.modified())
+                .map_err(|e| RemoveFilesError {
+                    details: format!("An error occurred in getting file modified time and the cleanup file failed: {}", e),
+                })?;
+            if (Utc::now() - DateTime::from(modified)).num_days() > self.days {
+                fs::remove_file(&path).map_err(|e| RemoveFilesError {
+                    details: format!("delete file failed, path: {:?}, error: {}", path, e),
+                })?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Clean up files in the specified `self.dir` that have been modified more than
+    /// a specified number of `self.days` ago.
+    ///
+    /// ```rust,ignore
+    /// // The parameter `cron_expression` default is `0 0 0 * * * *`.
+    /// // The parameter `cron_expression` sample: 0 15 6,8,10 * Mar,Jun Fri 2017
+    /// // means Run at second 0 of the 15th minute of the 6th, 8th, and 10th hour of any day in March
+    /// // and June that is a Friday of the year 2017.
+    /// // More information about `cron_expression` parameter see
+    /// // https://docs.rs/job_scheduler/latest/job_scheduler/
+    ///
+    /// schedule_cleanup_log_files("/opt/logs/apps/", 30, None);
+    /// ```
+    pub async fn schedule_cleanup_log_files(self) -> Result<(), RemoveFilesError> {
+        let sched = tokio_cron_scheduler::JobScheduler::new().await?;
+        let cron = self
+            .clone()
+            .cron_expression
+            .unwrap_or("0 0 0 * * * *".to_string());
+        sched
+            .add(Job::new_async(cron.as_str(), move |uuid, mut l| {
+                let cleaner = self.clone();
                 Box::pin(async move {
-                    cleanup_files_immediately(dir, days).unwp();
+                    if let Err(e) = cleaner.cleanup_files_immediately() {
+                        cleaner.error_handler.handle_error(e);
+                    };
                     let next_tick = l.next_tick_for_job(uuid).await;
                     if let Ok(Some(ts)) = next_tick {
                         tokio::time::sleep(tokio::time::Duration::from_secs(
@@ -143,11 +168,11 @@ pub async fn schedule_cleanup_log_files<P: AsRef<Path>>(
                         .await
                     }
                 })
-            },
-        )?)
-        .await?;
-    sched.start().await?;
-    Ok(())
+            })?)
+            .await?;
+        sched.start().await?;
+        Ok(())
+    }
 }
 
 #[allow(unused, unreachable_code)]
@@ -195,27 +220,51 @@ mod logger_test {
     use std::time::Duration;
     use std::{env, fs};
 
+    use crate::errors::RemoveFilesError;
     use chrono::{DateTime, Utc};
     use log::{debug, info};
 
-    use crate::logger::{cleanup_files_immediately, log_path, schedule_cleanup_log_files};
+    use crate::logger::{log_path, LogCleaner, LogCleanerErrorHandler};
     use crate::prelude::EnhancedUnwrap;
+
+    #[derive(Clone)]
+    struct MyLoggerErrorHandler;
+
+    // define custom error handler and implement LogCleanerErrorHandler trait in application code
+    impl LogCleanerErrorHandler for MyLoggerErrorHandler {
+        fn handle_error(&self, error: RemoveFilesError) {
+            // put custom error handling logic here
+            dbg!("handling error: {:?}", error);
+        }
+    }
 
     #[test]
     fn test_delete_log_files() {
-        if let Err(e) = cleanup_files_immediately("/opt/logs/apps/", 30) {
+        let cleaner = LogCleaner {
+            dir: "/opt/logs/apps/",
+            days: 30,
+            cron_expression: None,
+            error_handler: MyLoggerErrorHandler,
+        };
+        if let Err(e) = cleaner.cleanup_files_immediately() {
             panic!("test_delete_log_files failed, error: {}", e);
         }
     }
 
     #[tokio::test]
     async fn test_schedule_cleanup_log_files() {
-        let log_path = "/opt/logs/apps/";
+        let dir = "/opt/logs/apps/";
         let days = 30;
-        // execute once every 5 seconds for testing
-        let cron_expression = "1/5 * * * * * *";
+        let cleaner = LogCleaner {
+            dir,
+            days,
+            // execute once every 5 seconds for testing
+            cron_expression: Some("1/5 * * * * * *".to_string()),
+            error_handler: MyLoggerErrorHandler,
+        };
+
         println!("test_schedule_cleanup_log_files start");
-        if let Err(e) = schedule_cleanup_log_files(log_path, days, Some(cron_expression)).await {
+        if let Err(e) = cleaner.schedule_cleanup_log_files().await {
             panic!("schedule_cleanup_log_files failed, error: {}", e)
         }
         println!("test_schedule_cleanup_log_files end");
@@ -223,7 +272,7 @@ mod logger_test {
         let mut has_files = true;
         let mut count = 0;
         while count < 3 {
-            if let Ok(entries) = fs::read_dir(log_path) {
+            if let Ok(entries) = fs::read_dir(dir) {
                 has_files = entries.filter_map(|entry| entry.ok()).any(|entry| {
                     entry
                         .metadata()
