@@ -1,5 +1,6 @@
 // #![allow(unused)]
 
+use std::path::Path;
 use std::{env, fs, path::PathBuf};
 
 use chrono::{DateTime, Utc};
@@ -80,24 +81,26 @@ pub fn init_logger(
 ///
 /// cleanup_files_immediately("/opt/logs/apps/", 30);
 /// ```
-pub fn cleanup_files_immediately(directory: &str, days: i64) -> Result<(), RemoveFilesError> {
-    let paths = fs::read_dir(directory).map_err(|e| RemoveFilesError {
+pub fn cleanup_files_immediately<P: AsRef<Path>>(
+    dir: P,
+    days: i64,
+) -> Result<(), RemoveFilesError> {
+    let paths = fs::read_dir(dir).map_err(|e| RemoveFilesError {
         details: format!(
             "An error occurred in reading the directory and the cleanup file failed: {}",
             e
         ),
     })?;
 
-    for path in paths.flatten() {
-        let path_buf = path.path();
-        let modified = fs::metadata(&path_buf)
+    for path in paths.flatten().map(|e| e.path()) {
+        let modified = fs::metadata(&path)
             .and_then(|metadata| metadata.modified())
             .map_err(|e| RemoveFilesError {
                 details: format!("An error occurred in getting file modified time and the cleanup file failed: {}", e),
             })?;
         if (Utc::now() - DateTime::from(modified)).num_days() > days {
-            fs::remove_file(&path_buf).map_err(|e| RemoveFilesError {
-                details: format!("delete file failed, path: {:?}, error: {}", path_buf, e),
+            fs::remove_file(&path).map_err(|e| RemoveFilesError {
+                details: format!("delete file failed, path: {:?}, error: {}", path, e),
             })?;
         }
     }
@@ -117,36 +120,31 @@ pub fn cleanup_files_immediately(directory: &str, days: i64) -> Result<(), Remov
 ///
 /// schedule_cleanup_log_files("/opt/logs/apps/", 30, None);
 /// ```
-pub async fn schedule_cleanup_log_files(
-    directory: &str,
+pub async fn schedule_cleanup_log_files<P: AsRef<Path>>(
+    dir: P,
     days: i64,
     cron_expression: Option<&str>,
 ) -> Result<(), RemoveFilesError> {
-    let cron_expression = {
-        if cron_expression.is_none() {
-            "0 0 0 * * * *"
-        } else {
-            cron_expression.unwp().trim()
-        }
-    };
-
-    let directory = directory.to_owned();
+    let dir = dir.as_ref().to_owned();
 
     let sched = tokio_cron_scheduler::JobScheduler::new().await?;
     sched
-        .add(Job::new_async(cron_expression, move |uuid, mut l| {
-            let directory = directory.clone();
-            Box::pin(async move {
-                cleanup_files_immediately(&directory, days).unwp();
-                let next_tick = l.next_tick_for_job(uuid).await;
-                if let Ok(Some(ts)) = next_tick {
-                    tokio::time::sleep(tokio::time::Duration::from_secs(
-                        (ts - Utc::now()).num_seconds() as u64,
-                    ))
-                    .await
-                }
-            })
-        })?)
+        .add(Job::new_async(
+            cron_expression.unwrap_or("0 0 0 * * * *"),
+            move |uuid, mut l| {
+                let dir = dir.clone();
+                Box::pin(async move {
+                    cleanup_files_immediately(dir, days).unwp();
+                    let next_tick = l.next_tick_for_job(uuid).await;
+                    if let Ok(Some(ts)) = next_tick {
+                        tokio::time::sleep(tokio::time::Duration::from_secs(
+                            (ts - Utc::now()).num_seconds() as u64,
+                        ))
+                        .await
+                    }
+                })
+            },
+        )?)
         .await?;
     sched.start().await?;
     Ok(())
@@ -194,12 +192,14 @@ pub fn log_path(log_path: Option<&str>, env_log_path_key: Option<&str>) -> PathB
 
 #[cfg(test)]
 mod logger_test {
-    use crate::logger::{cleanup_files_immediately, log_path, schedule_cleanup_log_files};
-    use crate::prelude::EnhancedUnwrap;
-    use chrono::{DateTime, Utc};
-    use log::{debug, info};
     use std::time::Duration;
     use std::{env, fs};
+
+    use chrono::{DateTime, Utc};
+    use log::{debug, info};
+
+    use crate::logger::{cleanup_files_immediately, log_path, schedule_cleanup_log_files};
+    use crate::prelude::EnhancedUnwrap;
 
     #[test]
     fn test_delete_log_files() {
